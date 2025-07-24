@@ -1,0 +1,9 @@
+streamlit
+deepface
+opencv-python
+Pillow
+numpy
+scipy
+python-dotenv
+supabase
+requests
