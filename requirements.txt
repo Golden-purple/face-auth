@@ -7,6 +7,6 @@ scipy
 python-dotenv
 supabase
 requests
-tensorflow==2.11.0
+tensorflow==2.9.1
 protobuf<=3.20.3
 
