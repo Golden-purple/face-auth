@@ -7,3 +7,4 @@ scipy
 python-dotenv
 supabase
 requests
+protobuf<=3.20.3
