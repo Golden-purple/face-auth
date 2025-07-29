@@ -150,7 +150,7 @@ elif page == "login" :
         if(camera_allow_sign) :
             st.warning("Give username !")
     img_count = st.slider("Capture more frames for better accuracy !" , 
-              min_value = 5 , max_value = 10 , step = 1 , 
+              min_value = 1 , max_value = 10 , step = 1 , 
               disabled = not (camera_allow_sign and flag_name_sign) , width = "stretch")
     num_photos = img_count
 
