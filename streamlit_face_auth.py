@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import numpy as np
 from deepface import DeepFace
 from supabase import create_client , Client
+from ultralytics import YOLO
 
 load_dotenv()
 
@@ -17,17 +18,99 @@ SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-cascade_url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
-cascade_filename = "haarcascade_frontalface_default.xml"
+# Initialize YOLOv11 nano model for face detection
+@st.cache_resource
+def load_yolo_model():
+    """Load YOLOv11 nano model and cache it for performance"""
+    try:
+        # Try to load YOLOv11 nano model
+        model = YOLO('yolo11n.pt')  # YOLOv11 nano model
+        return model
+    except Exception as e:
+        st.error(f"Error loading YOLOv11 model: {e}")
+        return None
 
-try:
-    face_cascade = cv.CascadeClassifier(cascade_filename)
-    if face_cascade.empty():
-        raise FileNotFoundError
-except:
-    with open(cascade_filename, 'wb') as f:
-        f.write(requests.get(cascade_url).content)
-    face_cascade = cv.CascadeClassifier(cascade_filename)
+yolo_model = load_yolo_model()
+
+def detect_faces_yolo(image_rgb):
+    """
+    Detect faces using YOLOv11 with fallback strategies
+    Returns: list of face rectangles as (x, y, w, h)
+    """
+    if yolo_model is None:
+        return []
+    
+    try:
+        # Strategy 1: Try to detect persons and extract head/face region
+        results = yolo_model(image_rgb, verbose=False)
+        
+        faces = []
+        for result in results:
+            boxes = result.boxes
+            if boxes is not None:
+                for box in boxes:
+                    # Get class and confidence
+                    cls = int(box.cls[0].cpu().numpy())
+                    confidence = box.conf[0].cpu().numpy()
+                    
+                    # Check if it's a person (class 0) with good confidence
+                    if cls == 0 and confidence > 0.4:
+                        # Get bounding box coordinates
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        
+                        # Extract upper portion of person as potential face region
+                        person_w = int(x2 - x1)
+                        person_h = int(y2 - y1)
+                        
+                        # For face detection, take upper 30% of person height
+                        # and center it horizontally with 70% of person width
+                        face_h = int(person_h * 0.3)
+                        face_w = int(person_w * 0.7)
+                        
+                        # Center the face region
+                        face_x = int(x1 + (person_w - face_w) / 2)
+                        face_y = int(y1)
+                        
+                        # Ensure coordinates are valid
+                        face_x = max(0, min(face_x, image_rgb.shape[1] - face_w))
+                        face_y = max(0, min(face_y, image_rgb.shape[0] - face_h))
+                        face_w = max(0, min(face_w, image_rgb.shape[1] - face_x))
+                        face_h = max(0, min(face_h, image_rgb.shape[0] - face_y))
+                        
+                        # Validate minimum face size
+                        if face_w >= 50 and face_h >= 50:
+                            faces.append((face_x, face_y, face_w, face_h))
+        
+        # If no person detected, try a different approach
+        if not faces:
+            # Strategy 2: Look for any object that could be face-like in the center region
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        confidence = box.conf[0].cpu().numpy()
+                        
+                        if confidence > 0.3:  # Lower threshold for backup strategy
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            x, y = int(x1), int(y1)
+                            w, h = int(x2 - x1), int(y2 - y1)
+                            
+                            # Check if it's reasonably face-sized and positioned
+                            aspect_ratio = w / h if h > 0 else 0
+                            img_h, img_w = image_rgb.shape[:2]
+                            
+                            # Face should be in upper half of image and have reasonable aspect ratio
+                            if (0.5 <= aspect_ratio <= 2.0 and 
+                                w >= 40 and h >= 40 and 
+                                y < img_h * 0.7):  # Upper 70% of image
+                                faces.append((x, y, w, h))
+                                break  # Take first reasonable match
+        
+        return faces
+        
+    except Exception as e:
+        st.warning(f"YOLOv11 detection failed: {e}")
+        return []
 
 if "page" not in st.session_state :
     st.session_state["page"] = "home"
@@ -93,8 +176,7 @@ elif page == "signup" :
     if img is not None :
         image = Image.open(img)
         img_rgb = np.array(image.convert("RGB"))
-        gray = cv.cvtColor(img_rgb , cv.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray , scaleFactor = 1.3 , minNeighbors = 5)
+        faces = detect_faces_yolo(img_rgb)
         if len(faces) == 0 :
             st.warning("No faces captured. ")
         else:
@@ -182,8 +264,7 @@ elif page == "login" :
         for i, img in enumerate(images):
             image = Image.open(img)
             img_rgb = np.array(image.convert("RGB"))
-            gray = cv.cvtColor(img_rgb, cv.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray , scaleFactor = 1.3 , minNeighbors = 5)
+            faces = detect_faces_yolo(img_rgb)
 
             if len(faces) > 0:
                 x, y, w, h = faces[0]
